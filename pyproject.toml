@@ -9,7 +9,8 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "pygcs"
 version = "0.1.0"
-description = "A Headless Python GCode Sender"
+description = "A Headless Python GCode Sender with Event-Driven Architecture and Distributed Event Bridge"
+keywords = ["gcode", "cnc", "event-driven", "broadcast", "distributed", "manufacturing"]
 authors = [
     {name = "Mark Greene", email = "markdanielgreene@gmail.com"}
 ]
@@ -20,15 +21,44 @@ classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Intended Audience :: Manufacturing",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering",
     "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Distributed Computing",
+    "Topic :: Communications",
 ]
 dependencies = [
+    "pyserial>=3.5",  # For GCode communication
 ]
+
+[project.scripts]
+pygcs-event-bridge-server = "pygcs.event_bridge_server:main"
+pygcs-event-bridge-client = "pygcs.event_bridge_client:main"
 
 [project.optional-dependencies]
 dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "black>=23.0",
+    "isort>=5.12",
+    "flake8>=6.0",
+    "mypy>=1.0",
+    "pre-commit>=3.0",
+]
+test = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "pytest-mock>=3.10",
+]
+docs = [
+    "sphinx>=6.0",
+    "sphinx-rtd-theme>=1.2",
 ]
 
 [project.urls]
@@ -38,9 +68,11 @@ documentation = "https://github.com/markg/pygcs"
 "Bug Tracker" = "https://github.com/markg/pygcs/issues"
 
 [tool.setuptools]
-py-modules = ["pygcs"]
+packages = ["pygcs"]
+package-dir = {"" = "src"}
 
 [tool.setuptools.package-data]
+pygcs = ["*.txt", "*.md"]
 
 [tool.black]
 line-length = 88
@@ -55,3 +87,39 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+addopts = "-v --cov=pygcs --cov-report=term-missing --cov-report=html"
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+
+[tool.coverage.run]
+source = ["src/pygcs"]
+omit = [
+    "*/tests/*",
+    "*/test_*.py",
+    "*/__init__.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if self.debug:",
+    "if settings.DEBUG",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if 0:",
+    "if __name__ == .__main__.:",
+    "class .*\\bProtocol\\):",
+    "@(abc\\.)?abstractmethod",
+]

@@ -7,7 +7,7 @@ import socket
 import threading
 import json
 import time
-from broadcast import get_broadcast, Broadcastable
+from pygcs.broadcast import get_broadcast, Broadcastable
 
 class EventBridgeServer(Broadcastable):
     def __init__(self, host='localhost', port=8888):
