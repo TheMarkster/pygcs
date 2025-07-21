@@ -1,22 +1,12 @@
-from __future__ import annotations
-
-import serial
-import serial.tools.list_ports as list_ports
-import time
 import threading
-import sys
+import serial
+import time
 import re
+from listeners import GRBLListener, TerminalListener
+import json
+from broadcast import Signal, broadcast, Broadcastable
 
-# ports = list_ports.comports()
-# for p in ports:
-#     print(p)
 
-def check_connection(func):
-    def wrapper(self, *args, **kwargs):
-        if self.ser is None:
-            raise ConnectionError("Not connected to GRBL device.")
-        return func(self, *args, **kwargs)
-    return wrapper
 
 class SentCommand:
     def __init__(self, command: str):
@@ -42,66 +32,97 @@ class SentCommand:
             time.sleep(0.1)
         # print(f"Command {self.command} completed (blocking).")
 
-class TerminalListener(threading.Thread):
-    def __init__(self, controller: GRBLController):
-        super().__init__()
-        self.controller = controller
-        self.running = True
+
+class ErrorState:
+    def __init__(self):
+        self.error_codes = []
+        self.timestamps = []
     
-    @property
-    def ser(self) -> serial.Serial:
-        return self.controller.ser
-
-    @property
-    def controller(self) -> GRBLController:
-        return self._controller
+    def get_state(self):
+        return self.error_codes, self.timestamps
     
-    @controller.setter
-    def controller(self, value: GRBLController):
-        self._controller = value
+    def error_occurred(self, code):
+        self.error_codes.append(code)
+        self.timestamps.append(time.time())
     
-    def run(self):
-        while self.running:
-            try:
-                line = sys.stdin.readline().rstrip()
-                print(f"\r> {line}")
-                controller.send_command(line)
-            except:
-                pass
+    def clear_errors(self):
+        self.error_codes.clear()
+        self.timestamps.clear()
 
-    def stop(self):
-        self.running = False
 
-class GRBLListener(threading.Thread):
-    def __init__(self, controller: GRBLController):
-        super().__init__()
-        self.controller = controller
-        self.running = True
+#<Idle|MPos:-601.500,-601.500,-4.000|Bf:14.000,127.000|Fs:0.000,0.000|Ov:100.000,100.000,100.000|FS:0.000,0.000|WCO:-104.860,-143.940,-129.917>
+class PositionState:
+    def __init__(self):
+        self.position = [0.0, 0.0, 0.0]
+        self.feed_rate = 0.0
+        self.spindle_speed = 0.0
     
-    @property
-    def ser(self) -> serial.Serial:
-        return self.controller.ser
+    def update_position(self, pos):
+        self.position = pos
+    
+    def update_feed_rate(self, rate):
+        self.feed_rate = rate
+    
+    def update_spindle_speed(self, speed):
+        self.spindle_speed = speed
+    
+    def serialize(self):
+        return {
+            "position": self.position,
+            "feed_rate": self.feed_rate,
+            "spindle_speed": self.spindle_speed
+        }
 
-    def run(self):
-        while self.running:
-            try:
-                line = self.ser.readline().decode('utf-8').rstrip()
-                if line:
-                    self.controller.receive_message(line)
-            except:
-                pass
+    def deserialize(self, state_str):
+        state = json.loads(state_str)
+        self.position = state.get("position", [0.0, 0.0, 0.0])
+        self.feed_rate = state.get("feed_rate", 0.0)
+        self.spindle_speed = state.get("spindle_speed", 0.0)
 
-    def stop(self):
-        self.running = False
+class GRBLController(Broadcastable):
+    # Signals
+    LOG = Signal("log")
+    ERROR = Signal("error_log")
+    STATUS_UPDATED = Signal("status_message")
+    SHUTDOWN = Signal("shutdown")
+    GCODE_SENT = Signal("gcode_sent")
+    MCODE_SENT = Signal("mcode_sent")
+    GRBL_SEND = Signal("grbl_send")
 
-class GRBLController:
+    code_processors = {}
+    
+    # GRBL_SEND_COMMAND = Signal("grbl_send_command")
+    # GRBL_COMMAND_RECEIVE = Slot("grbl_command_receive")
+
     def __init__(self, port, baudrate=115200, timeout=1):
-        print("Initializing GRBL Controller...")
+        # print("Initializing GRBL Controller...")
+        # Command management
         self.command_stack = []
         self.planner_queue = []
         self.error_stack = []
         self.max_command_stack_size = 10
+
+        # Program state
+        self.idle = False
+        self.program_running = False
+        self.current_program = ''
+        self.state = dict(
+            MPos = [0.0, 0.0, 0.0],
+            Bf = [0,0],
+            Fs = [0,0],
+            Ov = [100,100,100],
+        )
+        
+        # Predicted data
+        self.target_position = [0, 0, 0]
+        
+        # Custom data
+        self.custom_data = {}
+
+        # Communications        
         self.ser = serial.Serial(port, baudrate, timeout=timeout)
+
+        # Threading
         print(f"Connected to {port} at {baudrate} baud.")
         self.lock = threading.Lock()
         self.monitor_thread = GRBLListener(self)
@@ -109,35 +130,59 @@ class GRBLController:
         self.terminal_thread = TerminalListener(self)
         self.terminal_thread.start()
         self.macro_path = './macros'
-        self.last_update = ""
+        
         self.paused = False
         self.last_probe = None
-        self.state = dict(
-            MPos = [0.0, 0.0, 0.0],
-            Bf = [0,0],
-            Fs = [0,0],
-            Ov = [100,100,100],
-        )
-    
-    @property
-    def x(self):
-        return self.state['MPos'][0]
 
-    @property
-    def y(self):
-        return self.state['MPos'][1]
-    
-    @property
-    def z(self):
-        return self.state['MPos'][2]
+        self.wait_for_user = False
 
-    @property
-    def is_connected(self):
-        return self.ser is not None and self.ser.is_open
+        self.program_queue = []
+
+        self.running = True
+        self.stopped = True
+        
+        
+        # Initialize control server
+        # self.control_server = ControlServer(self)
+        # self.control_server.start()
     
+    def exec(self):
+        self.stopped = False
+        while self.running:
+            ready = False
+            with self.lock:
+                if self.program_queue:
+                    ready = True
+                    self.program_running = True
+                    func, *args = self.program_queue.pop(0)
+            if ready:
+                func(*args)
+                with self.lock:
+                    if len(self.program_queue) == 0:
+                        self.program_running = False
+            else:
+                time.sleep(0.1)
+        self.stopped = True
+    
+    @classmethod
+    def code_processor(cls, name):
+        """Decorator to register a code processor function"""
+        def decorator(func):
+            cls.code_processors[name] = func
+            return func
+        return decorator
+
+    @broadcast.consumer('user_response')
+    def user_response(self, response):
+        self.wait_for_user = False
+
     def __del__(self):
-        if self.ser is not None:
-            self.disconnect()
+        # Shutdown all connections and threads
+        self.SHUTDOWN.emit()
+
+    @broadcast.consumer('shutdown')
+    def shutdown(self):
+        self.running = False
 
     def wait_for_probe(self, timeout=60):
         if self.last_probe:
@@ -188,14 +233,8 @@ class GRBLController:
             time.sleep(0.5)
         print("Machine is now idle.")
 
-    def exec_macro(self, command, blocking=False, timeout=10):
-        path = f"{self.macro_path}/{command}.g"
-
+    def process_code(self, lines):
         trackers = []
-
-        with open(path, 'r') as file:
-            lines = file.readlines()
-
         for line in lines:
             if line[0] == ';':
                 continue
@@ -208,38 +247,38 @@ class GRBLController:
                     print(f"Replaced {name} with {self.probe_data[i]:.3f} in line: {line}")
                     line = line.replace(name, f"{self.probe_data[i]:.3f}")
 
-            if line == 'M0':
-                print("Pausing for user input...")
-                # tracker.wait()
-                time.sleep(0.5)
-                self.wait_for_idle(timeout=120)
-
-                with self.lock:
-                    self.paused = True
-                tracker = self.send_command('M0')
-                trackers.append(tracker)
-                time.sleep(0.5)
-
-                input('Press Enter to continue...')
-                tracker = self.send_command('~') # Cycle start
-
-                with self.lock:
-                    self.paused = False
-
-                trackers.append(tracker)
+            if line in self.code_processors:
+                trackers.extend(self.code_processors[line]())
             else:
                 tracker = self.send_command(line)
                 if tracker:
                     trackers.append(tracker)
 
-        if blocking:
-            for tracker in trackers:
-                if tracker:
-                    tracker.wait(timeout=timeout)
+        # if blocking:
+        for tracker in trackers:
+            if tracker:
+                tracker.wait(timeout=600)
             
-            time.sleep(0.5)
-            self.wait_for_idle(timeout=120)
-            print("Macro execution complete.")
+        time.sleep(0.5)
+        self.wait_for_idle(timeout=120)
+
+    @broadcast.consumer('exec_macro')
+    def exec_macro(self, command, main_thread=False):
+        if not main_thread:
+            with self.lock:
+                if self.program_running:
+                    self.ERROR.emit("Cannot execute macro while another is running.")
+                else:
+                    self.program_queue.append((self.exec_macro, command, True))
+            return
+
+        path = f"{self.macro_path}/{command}.g"
+
+        with open(path, 'r') as file:
+            lines = file.readlines()
+
+        self.process_code(lines)
+        print("Macro execution complete.")
 
     def wait_for_unpause(self, timeout=1000):
         print("Waiting for unpause...")
@@ -272,6 +311,7 @@ class GRBLController:
     def ser(self, value: serial.Serial):
         self._ser = value
     
+    @broadcast.consumer('grbl.read_line')
     def receive_message(self, message):
         if message == 'ok':
             if self.command_stack:
@@ -291,6 +331,13 @@ class GRBLController:
         elif message.startswith('<') and message.endswith('>'):
             self.last_update = message[1:-1]
             print(f"Status update: {message}")
+            
+            # Broadcast status update to connected clients
+            if hasattr(self, 'control_server'):
+                self.control_server.broadcast_event("status_update", {
+                    "raw_message": message,
+                    "state": self.state
+                })
         elif message.startswith('['):
             source, values, *rest = message[1:-1].split(':')
             if source == 'PRB':
@@ -299,6 +346,20 @@ class GRBLController:
         else:
             print(f"Received message: {message}")
     
+    @broadcast.consumer('load_program')
+    def load_program(self, program):
+        if self.program_running:
+            self.ERROR.emit("Cannot load program while another is running.")
+
+        self.program = program
+    
+    @broadcast.consumer('program_start')
+    def program_start(self):
+        for line in self.program.splitlines():
+            line = line.strip()
+            if line and not line.startswith(';'):
+                self.send_command(line, high_priority=True)
+
     def send_command(self, command, tracker=None, high_priority=False):
         command = command.strip()
         if not command:
@@ -323,75 +384,43 @@ class GRBLController:
                     self.planner_queue.append((command, tracker))
             else:
                 print(f"Sending command: {command}")
-                self.ser.write((command + '\n').encode('utf-8'))
+                # self.ser.write((command + '\n').encode('utf-8'))
+                self.GRBL_SEND.emit(command + '\n')
                 self.command_stack.append(tracker)
         
         return tracker
             
-    
     def disconnect(self):
         if self.ser is None:
             return
-        
-        self.ser.close()
-
-        if self.monitor_thread.is_alive():
-            self.monitor_thread.stop()
-            self.monitor_thread.join()
-        
-        if self.terminal_thread.is_alive():
-            self.terminal_thread.stop()
-            self.terminal_thread.join()
 
         self.ser = None
 
+    @code_processor('M0')
+    def M0_process(self, line):
+        trackers = []
 
-
-controller = GRBLController('/dev/ttyACM0')
-time.sleep(2)
-
-controller.update_state()
-attemps = 3
-while attemps > 0:
-    tracker = controller.send_command('$H')
-    tracker.wait(timeout=60)
-    if controller.get_error_state():
-        print("Errors detected:", controller.get_error_state())
-        controller.clear_errors()
-        controller.send_command('$X', blocking=True)
+        print("Pausing for user input...")
+        # tracker.wait()
         time.sleep(0.5)
-        attemps -= 1
-    else:
-        print("Homing successful")
-        break
+        self.wait_for_idle(timeout=120)
 
-time.sleep(0.5)
-# time.sleep(5)
-print("Moving...")
-controller.send_command('G91 G0 X-600 Y-600')
+        with self.lock:
+            self.paused = True
+        tracker = self.send_command('M0')
+        trackers.append(tracker)
+        time.sleep(0.5)
 
-time.sleep(0.5)
-controller.wait_for_idle(timeout=120)
+        self.wait_for_user = True
+        broadcast.emit('prompt_user', "Press Enter to continue...")
+        while self.wait_for_user:
+            time.sleep(0.1)
+        
+        tracker = self.send_command('~') # Cycle start
 
-print("Current position:", controller.state['MPos'])
+        with self.lock:
+            self.paused = False
 
-time.sleep(0.5)
-print("Executing toolchange macro...")
-controller.exec_macro('toolchange', blocking=True, timeout=500)
-# print("Disconnecting...")
+        trackers.append(tracker)
 
-# Could we get a false positive here?
-time.sleep(0.5) # Give it time to start moving
-controller.wait_for_idle(timeout=120)
-
-print("Tool change complete. Current position:", controller.state['MPos'])
-
-# Move to absolute -600, -600
-
-
-while controller.is_connected:
-    time.sleep(1)
-
-
-
-print("done")
+        return trackers

@@ -1,0 +1,57 @@
+[build-system]
+requires = [
+    "setuptools>=61.0",
+    "wheel",
+    "pyserial"
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pygcs"
+version = "0.1.0"
+description = "A Headless Python GCode Sender"
+authors = [
+    {name = "Mark Greene", email = "markdanielgreene@gmail.com"}
+]
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.8"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Manufacturing",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+]
+
+[project.optional-dependencies]
+dev = [
+]
+
+[project.urls]
+homepage = "https://github.com/markg/pygcs"
+repository = "https://github.com/markg/pygcs"
+documentation = "https://github.com/markg/pygcs"
+"Bug Tracker" = "https://github.com/markg/pygcs/issues"
+
+[tool.setuptools]
+py-modules = ["pygcs"]
+
+[tool.setuptools.package-data]
+
+[tool.black]
+line-length = 88
+target-version = ['py38']
+
+[tool.isort]
+profile = "black"
+line_length = 88
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
