@@ -9,9 +9,11 @@ import json
 import time
 from pygcs.broadcast import get_broadcast, Broadcastable
 
-class EventBridgeServer(Broadcastable):
+class EventBridgeServer(threading.Thread, Broadcastable):
     def __init__(self, host='localhost', port=8888):
-        super().__init__(namespace='event_bridge')
+        Broadcastable.__init__(namespace='event_bridge')
+        threading.Thread.__init__(self, daemon=True)
+        
         self.host = host
         self.port = port
         self.clients = []  # List of client sockets
@@ -24,7 +26,7 @@ class EventBridgeServer(Broadcastable):
         
         print(f"Event Bridge Server initialized on {host}:{port}")
     
-    def start(self):
+    def run(self):
         """Start the server and listen for client connections"""
         self.running = True
         self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -163,8 +165,7 @@ def main():
     
     try:
         # Start server in a separate thread
-        server_thread = threading.Thread(target=server.start, daemon=True)
-        server_thread.start()
+        server.start()
         
         # Add some test event handlers
         broadcast = get_broadcast()

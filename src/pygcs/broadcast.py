@@ -3,7 +3,7 @@ class Broadcast:
         self.instances = {} # class.name -> List[instance]
         self.consumers = {} # signal -> List[Tuple[func, class]]
         self.direct_consumers = {} # signal -> List[callback] (for direct connections)
-        self.watchers = [] # Send a copy of all signals here
+        self.forwarding = [] # Send a copy of all signals here
         self.event_history = []  # For debugging/replay
         self.middleware = []     # For event processing pipeline
         self.namespaces = {}     # For addon isolation
@@ -60,12 +60,12 @@ class Broadcast:
             except Exception as e:
                 self.emit('direct_consumer_error', signal, callback, e)
         
-        for watcher in self.watchers:
+        for gateway in self.forwarding:
             try:
-                watcher(signal, *args, **kwargs)
+                gateway(signal, *args, **kwargs)
             except Exception as e:
                 # Don't let watcher errors break the broadcast
-                self.emit('watcher_error', signal, watcher, e)
+                self.emit('forwarding_error', signal, gateway, e)
 
     def consumer(self, signal: str):
         """Decorator to register a method as a consumer for a signal"""
@@ -125,12 +125,12 @@ class Broadcast:
     
     def add_watcher(self, watcher_func):
         """Add a watcher that receives all broadcast signals"""
-        self.watchers.append(watcher_func)
+        self.forwarding.append(watcher_func)
     
     def remove_watcher(self, watcher_func):
         """Remove a watcher"""
-        if watcher_func in self.watchers:
-            self.watchers.remove(watcher_func)
+        if watcher_func in self.forwarding:
+            self.forwarding.remove(watcher_func)
     
     def get_event_history(self, signal=None, limit=None):
         """Get event history, optionally filtered by signal"""
