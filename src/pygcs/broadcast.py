@@ -1,3 +1,12 @@
+from __future__ import annotations
+from typing import Union
+import threading
+
+if 'BROADCAST_MODULE' in globals():
+    raise Exception("broadcast.py loaded multiple times!")
+else:
+    BROADCAST_MODULE = True
+
 class Broadcast:
     def __init__(self):
         self.instances = {} # class.name -> List[instance]
@@ -7,6 +16,10 @@ class Broadcast:
         self.event_history = []  # For debugging/replay
         self.middleware = []     # For event processing pipeline
         self.namespaces = {}     # For addon isolation
+    
+    def forward_to(self, gateway_func):
+        """Add a gateway function to forward all events to"""
+        self.forwarding.append(gateway_func)
     
     def emit(self, signal, *args, namespace=None, **kwargs):
         # Add middleware support
@@ -67,8 +80,11 @@ class Broadcast:
                 # Don't let watcher errors break the broadcast
                 self.emit('forwarding_error', signal, gateway, e)
 
-    def consumer(self, signal: str):
+    def consumer(self, signal: Union[str, Signal]):
         """Decorator to register a method as a consumer for a signal"""
+        if hasattr(signal, "name"):
+            signal = signal.name
+
         def decorator(func):
             # Check if this is a class method or a standalone function
             qualname_parts = func.__qualname__.split(".")
@@ -221,6 +237,10 @@ class Signal:
             return self
         return BoundSignal(self, instance)
 
+    def emit(self, *args, **kwargs):
+        """Emit this signal through the global broadcast system"""
+        get_broadcast().emit(self.name, *args, namespace=None, **kwargs)
+
 class BoundSignal:
     """A signal bound to a specific instance"""
     def __init__(self, signal, instance):
@@ -229,27 +249,45 @@ class BoundSignal:
         
         # Use global signal name by default, or class-specific if explicitly requested
         if getattr(signal, 'global_signal', True):
-            self.signal_name = signal.name
+            self.name = signal.name
         else:
-            self.signal_name = f"{signal._owner_class}.{signal.name}"
+            self.name = f"{signal._owner_class}.{signal.name}"
     
     def emit(self, *args, **kwargs):
         """Emit this signal through the global broadcast system"""
         namespace = getattr(self.instance, '_broadcast_namespace', None)
-        get_broadcast().emit(self.signal_name, *args, namespace=namespace, **kwargs)
+        get_broadcast().emit(self.name, *args, namespace=namespace, **kwargs)
     
     def connect(self, callback):
         """Connect a callback directly to this signal"""
-        get_broadcast().add_direct_consumer(self.signal_name, callback)
+        get_broadcast().add_direct_consumer(self.name, callback)
     
     def disconnect(self, callback):
         """Disconnect a callback from this signal"""
-        get_broadcast().remove_direct_consumer(self.signal_name, callback)
+        get_broadcast().remove_direct_consumer(self.name, callback)
 
-# Global broadcast instance
-broadcast = Broadcast()
+# Module-level singleton implementation
+_broadcast_instance = None
+_broadcast_lock = None
+
+def _get_lock():
+    """Get or create the singleton lock"""
+    global _broadcast_lock
+    if _broadcast_lock is None:
+        _broadcast_lock = threading.Lock()
+    return _broadcast_lock
 
 def get_broadcast():
-    """Get the global broadcast instance - allows for delayed reference"""
-    return broadcast
+    """Get the global broadcast instance - thread-safe singleton"""
+    global _broadcast_instance
+    if _broadcast_instance is None:
+        lock = _get_lock()
+        with lock:
+            # Double-check locking pattern
+            if _broadcast_instance is None:
+                _broadcast_instance = Broadcast()
+    return _broadcast_instance
 
+# Convenience reference for backward compatibility
+# This will always return the same instance due to the singleton pattern
+broadcast = get_broadcast()

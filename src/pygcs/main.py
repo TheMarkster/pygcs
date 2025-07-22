@@ -1,31 +1,38 @@
-from pygcs.controller import Controller
+from pygcs.controller import GRBLController
 from pygcs.serial_comm import GRBLSerial
 from pygcs.pretty_terminal import PrettyTerminal
 from pygcs.event_bridge_server import EventBridgeServer
-from pygcs.broadcast import get_broadcast
+from pygcs.broadcast import broadcast
+from pygcs.signals import signals
 import time
 
 def main():
-    thread_pool = []
-
-    controller = Controller()
+    thread_pool = {}
 
     terminal = PrettyTerminal()
-    thread_pool.append(terminal)
+    thread_pool['pretty_terminal'] = terminal
+    terminal.start()
 
-    serial = GRBLSerial('/dev/ttyUSB0', 115200, controller)
-    thread_pool.append(serial)
+    
+
+    serial = GRBLSerial('/dev/ttyUSB0', 115200)
+    thread_pool['serial_comm'] = serial
+    serial.start()
 
     server = EventBridgeServer()
-    thread_pool.append(server)
-    get_broadcast().forward_to(server)
+    thread_pool['event_bridge'] = server
+    broadcast.forward_to(server._forward_event_to_clients)
+    server.start()
 
-    for thread in thread_pool:
-        thread.start()
+    # for thread in thread_pool:
+    #     thread.start()
+
+    controller = GRBLController()
 
     controller.exec()
 
-    for thread in thread_pool:
+    for name, thread in thread_pool.items():
+        signals.LOG.emit(f"Waiting for {name} thread to exit...")
         thread.join()
 
 

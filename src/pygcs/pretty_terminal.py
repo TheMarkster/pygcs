@@ -5,16 +5,14 @@ import tty
 import select
 import os
 import time
-from broadcast import broadcast, Broadcastable, Signal
+from .signals import signals
+from .broadcast import broadcast, Broadcastable, Signal
 
 CLEAR_LINE = '\x1b[2K'
 RED = '\x1b[31m'
 RESET = '\x1b[0m'
 
 class PrettyTerminal(threading.Thread, Broadcastable):
-    USER_RESPONSE = Signal("user_response")
-    USER_INPUT = Signal("user_input")
-
     def __init__(self):
         threading.Thread.__init__(self)
         Broadcastable.__init__(self)
@@ -28,12 +26,14 @@ class PrettyTerminal(threading.Thread, Broadcastable):
         self.user_prompt = ""
         self.status_message = ""
         self.lines_from_bottom = 2
+        self.raw_mode = False
 
     def setup_raw_mode(self):
         """Set terminal to raw mode to intercept all input"""
         if os.isatty(sys.stdin.fileno()):
             self.old_settings = termios.tcgetattr(sys.stdin.fileno())
             tty.setraw(sys.stdin.fileno())
+            self.raw_mode = True
 
     def restore_terminal(self):
         """Restore terminal to original settings"""
@@ -53,6 +53,8 @@ class PrettyTerminal(threading.Thread, Broadcastable):
 
         if self.old_settings and os.isatty(sys.stdin.fileno()):
             termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, self.old_settings)
+        
+        self.raw_mode = False
 
     def run(self):
         try:
@@ -70,14 +72,19 @@ class PrettyTerminal(threading.Thread, Broadcastable):
             pass
         finally:
             self.restore_terminal()
+        
+        signals.LOG.emit("PrettyTerminal thread exited.")
+
 
     def handle_char(self, c):
         """Handle individual character input"""
         if ord(c) == 3:  # Ctrl+C
             self.running = False
+            signals.DISCONNECTED.emit()
             return
         elif ord(c) == 4:  # Ctrl+D (EOF)
             self.running = False
+            signals.DISCONNECTED.emit()
             return
         elif c == '\n' or c == '\r':  # Enter key
             # Process the line without showing the newline
@@ -85,9 +92,9 @@ class PrettyTerminal(threading.Thread, Broadcastable):
             self.current_user_input = ""
             if self.user_prompt:
                 self.user_prompt = ""
-                self.USER_RESPONSE.emit(line)
+                signals.USER_RESPONSE.emit(line)
             else:
-                self.USER_INPUT.emit(line)
+                signals.USER_INPUT.emit(line)
             self.cursor_position = 0
             
             # Redraw interface after processing input
@@ -155,7 +162,7 @@ class PrettyTerminal(threading.Thread, Broadcastable):
         
         sys.stdout.flush()
 
-    @broadcast.consumer('status_message')
+    @broadcast.consumer(signals.STATUS_MESSAGE)
     def update_status_message(self, message: str):
         """Update the status message and redraw interface"""
         self.status_message = message
@@ -179,15 +186,21 @@ class PrettyTerminal(threading.Thread, Broadcastable):
         
         sys.stdout.flush()
     
-    @broadcast.consumer('log')
+    @broadcast.consumer(signals.LOG)
     def LOG(self, message: str):
-        self.print(message)
+        if self.raw_mode:
+            self.print(message)
+        else:
+            sys.stdout.write(f"{message}\n\r")
     
-    @broadcast.consumer('error_log')
+    @broadcast.consumer(signals.ERROR)
     def ERROR_LOG(self, message: str):
-        self.print(f"{message}", True)
+        if self.raw_mode:
+            self.print(f"{message}", True)
+        else:
+            sys.stdout.write(f"{RED}{message}{RESET}\n\r")
 
-    @broadcast.consumer('prompt_user')
+    @broadcast.consumer(signals.PROMPT_USER)
     def prompt_user(self, prompt: str):
         self.user_prompt = prompt
         self.redraw_input_line()
@@ -219,25 +232,25 @@ class PrettyTerminal(threading.Thread, Broadcastable):
         """Stop the terminal listener"""
         self.running = False
 
-listener = PrettyTerminal()
-listener.start()
+# listener = PrettyTerminal()
+# listener.start()
 
-time.sleep(0.1)
+# time.sleep(0.1)
 
-@broadcast.consumer('user_response')
-def handle_user_response(response: str):
-    broadcast.emit('log', f"User responded: '{response}'")
+# @broadcast.consumer('user_response')
+# def handle_user_response(response: str):
+#     broadcast.emit('log', f"User responded: '{response}'")
 
-@broadcast.consumer('user_input')
-def handle_user_input(command: str):
-    broadcast.emit('log', f"User input: '{command}'")
+# @broadcast.consumer('user_input')
+# def handle_user_input(command: str):
+#     broadcast.emit('log', f"User input: '{command}'")
 
-broadcast.emit('status_message', "I'm the current status message!")
-broadcast.emit('log', "This is a log message.")
-broadcast.emit('error_log', "This is an error log message.")
-broadcast.emit('prompt_user', "Enter your name:")
+# broadcast.emit('status_message', "I'm the current status message!")
+# broadcast.emit('log', "This is a log message.")
+# broadcast.emit('error_log', "This is an error log message.")
+# broadcast.emit('prompt_user', "Enter your name:")
 
 
 
-while listener.is_alive():
-    listener.join(1)
+# while listener.is_alive():
+#     listener.join(1)

@@ -2,9 +2,10 @@ import threading
 import serial
 import time
 import re
-from listeners import GRBLListener, TerminalListener
+# from listeners import GRBLListener, TerminalListener
 import json
-from broadcast import Signal, broadcast, Broadcastable
+from .signals import signals
+from .broadcast import Signal, broadcast, Broadcastable
 
 
 
@@ -79,22 +80,22 @@ class PositionState:
         self.feed_rate = state.get("feed_rate", 0.0)
         self.spindle_speed = state.get("spindle_speed", 0.0)
 
+code_processors = {}
+
+def code_processor(name):
+    """Decorator to register a code processor function"""
+    def decorator(func):
+        code_processors[name] = func
+        return func
+    return decorator
+
+def get_code_processor(line):
+    return code_processors.get(line, None)
+
+
 class GRBLController(Broadcastable):
-    # Signals
-    LOG = Signal("log")
-    ERROR = Signal("error_log")
-    STATUS_UPDATED = Signal("status_message")
-    SHUTDOWN = Signal("shutdown")
-    GCODE_SENT = Signal("gcode_sent")
-    MCODE_SENT = Signal("mcode_sent")
-    GRBL_SEND = Signal("grbl_send")
-
-    code_processors = {}
-    
-    # GRBL_SEND_COMMAND = Signal("grbl_send_command")
-    # GRBL_COMMAND_RECEIVE = Slot("grbl_command_receive")
-
-    def __init__(self, port, baudrate=115200, timeout=1):
+    def __init__(self):
+        super().__init__()
         # print("Initializing GRBL Controller...")
         # Command management
         self.command_stack = []
@@ -120,15 +121,15 @@ class GRBLController(Broadcastable):
         self.custom_data = {}
 
         # Communications        
-        self.ser = serial.Serial(port, baudrate, timeout=timeout)
+        # self.ser = serial.Serial(port, baudrate, timeout=timeout)
 
         # Threading
-        print(f"Connected to {port} at {baudrate} baud.")
+        # print(f"Connected to {port} at {baudrate} baud.")
         self.lock = threading.Lock()
-        self.monitor_thread = GRBLListener(self)
-        self.monitor_thread.start()
-        self.terminal_thread = TerminalListener(self)
-        self.terminal_thread.start()
+        # self.monitor_thread = GRBLListener(self)
+        # self.monitor_thread.start()
+        # self.terminal_thread = TerminalListener(self)
+        # self.terminal_thread.start()
         self.macro_path = './macros'
         
         self.paused = False
@@ -163,24 +164,19 @@ class GRBLController(Broadcastable):
             else:
                 time.sleep(0.1)
         self.stopped = True
+        signals.LOG.emit("Controller main loop exited.")
     
-    @classmethod
-    def code_processor(cls, name):
-        """Decorator to register a code processor function"""
-        def decorator(func):
-            cls.code_processors[name] = func
-            return func
-        return decorator
 
-    @broadcast.consumer('user_response')
+
+    @broadcast.consumer(signals.USER_RESPONSE)
     def user_response(self, response):
         self.wait_for_user = False
 
     def __del__(self):
         # Shutdown all connections and threads
-        self.SHUTDOWN.emit()
+        signals.DISCONNECTED.emit()
 
-    @broadcast.consumer('shutdown')
+    @broadcast.consumer(signals.DISCONNECTED)
     def shutdown(self):
         self.running = False
 
@@ -247,8 +243,8 @@ class GRBLController(Broadcastable):
                     print(f"Replaced {name} with {self.probe_data[i]:.3f} in line: {line}")
                     line = line.replace(name, f"{self.probe_data[i]:.3f}")
 
-            if line in self.code_processors:
-                trackers.extend(self.code_processors[line]())
+            if processor := get_code_processor(line):
+                trackers.extend(processor())
             else:
                 tracker = self.send_command(line)
                 if tracker:
@@ -262,12 +258,12 @@ class GRBLController(Broadcastable):
         time.sleep(0.5)
         self.wait_for_idle(timeout=120)
 
-    @broadcast.consumer('exec_macro')
+    @broadcast.consumer(signals.EXEC_MACRO)
     def exec_macro(self, command, main_thread=False):
         if not main_thread:
             with self.lock:
                 if self.program_running:
-                    self.ERROR.emit("Cannot execute macro while another is running.")
+                    signals.ERROR.emit("Cannot execute macro while another is running.")
                 else:
                     self.program_queue.append((self.exec_macro, command, True))
             return
@@ -311,7 +307,7 @@ class GRBLController(Broadcastable):
     def ser(self, value: serial.Serial):
         self._ser = value
     
-    @broadcast.consumer('grbl.read_line')
+    @broadcast.consumer(signals.DATA_RECEIVED)
     def receive_message(self, message):
         if message == 'ok':
             if self.command_stack:
@@ -346,14 +342,14 @@ class GRBLController(Broadcastable):
         else:
             print(f"Received message: {message}")
     
-    @broadcast.consumer('load_program')
+    @broadcast.consumer(signals.LOAD_PROGRAM)
     def load_program(self, program):
         if self.program_running:
-            self.ERROR.emit("Cannot load program while another is running.")
+            signals.ERROR.emit("Cannot load program while another is running.")
 
         self.program = program
     
-    @broadcast.consumer('program_start')
+    @broadcast.consumer(signals.PROGRAM_START)
     def program_start(self):
         for line in self.program.splitlines():
             line = line.strip()
@@ -385,7 +381,7 @@ class GRBLController(Broadcastable):
             else:
                 print(f"Sending command: {command}")
                 # self.ser.write((command + '\n').encode('utf-8'))
-                self.GRBL_SEND.emit(command + '\n')
+                signals.SEND_DATA.emit(command + '\n')
                 self.command_stack.append(tracker)
         
         return tracker
@@ -412,7 +408,8 @@ class GRBLController(Broadcastable):
         time.sleep(0.5)
 
         self.wait_for_user = True
-        broadcast.emit('prompt_user', "Press Enter to continue...")
+        # broadcast.emit('prompt_user', "Press Enter to continue...")
+        signals.PROMPT_USER.emit("Press Enter to continue...")
         while self.wait_for_user:
             time.sleep(0.1)
         
