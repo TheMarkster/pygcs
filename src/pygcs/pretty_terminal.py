@@ -5,12 +5,21 @@ import tty
 import select
 import os
 import time
+from functools import wraps
 from .signals import signals
 from .broadcast import broadcast, Broadcastable, Signal
 
 CLEAR_LINE = '\x1b[2K'
 RED = '\x1b[31m'
 RESET = '\x1b[0m'
+
+def synchronize(func):
+    @wraps(func)
+    def wrapper(self, *args, **kwargs):
+        with self.lock:
+            return func(self, *args, **kwargs)
+        # return
+    return wrapper
 
 class PrettyTerminal(threading.Thread, Broadcastable):
     def __init__(self):
@@ -27,6 +36,7 @@ class PrettyTerminal(threading.Thread, Broadcastable):
         self.status_message = ""
         self.lines_from_bottom = 2
         self.raw_mode = False
+        self.lock = threading.RLock()
 
     def setup_raw_mode(self):
         """Set terminal to raw mode to intercept all input"""
@@ -38,17 +48,17 @@ class PrettyTerminal(threading.Thread, Broadcastable):
     def restore_terminal(self):
         """Restore terminal to original settings"""
         # Go to the bottom line
-        while self.lines_from_bottom > 0:
+        while self.lines_from_bottom > -1:
             sys.stdout.write(f"\x1b[B")
             self.lines_from_bottom -= 1
         
         # We're on the status line now 
         # Move to the end of the line and add a newline
         sys.stdout.write("\r")
-        for _ in range(len(self.status_message)+8):
-            sys.stdout.write("\x1b[C")
+        # for _ in range(len(self.status_message)+8):
+        #     sys.stdout.write("\x1b[C")
         
-        sys.stdout.write("\n\r")
+        # sys.stdout.write("\n\r")
         sys.stdout.flush()
 
         if self.old_settings and os.isatty(sys.stdin.fileno()):
@@ -58,20 +68,22 @@ class PrettyTerminal(threading.Thread, Broadcastable):
 
     def run(self):
         try:
-            self.setup_raw_mode()
-            # Clear screen and move cursor to top
-            sys.stdout.write("\x1b[2J\x1b[H")
-            sys.stdout.write("Pretty Terminal (Ctrl+C to exit)\n\r")
-            self.redraw_interface()
+            with self.lock:
+                self.setup_raw_mode()
+                sys.stdout.write("\x1b[2J\x1b[H")
+                sys.stdout.write("Pretty Terminal (Ctrl+C to exit)\n\r")
+                self.redraw_interface()
             
             while self.running:
                 if select.select([sys.stdin], [], [], 0.1)[0]:
                     c = sys.stdin.read(1)
-                    self.handle_char(c)
+                    with self.lock:
+                        self.handle_char(c)
         except KeyboardInterrupt:
             pass
         finally:
-            self.restore_terminal()
+            with self.lock:
+                self.restore_terminal()
         
         signals.LOG.emit("PrettyTerminal thread exited.")
 
@@ -129,7 +141,7 @@ class PrettyTerminal(threading.Thread, Broadcastable):
             )
             self.cursor_position += 1
             self.redraw_input_line()
-
+    
     def redraw_interface(self):
         """Redraw the complete interface with status and input lines"""
         # Move to bottom of screen and clear last two lines
@@ -163,6 +175,7 @@ class PrettyTerminal(threading.Thread, Broadcastable):
         sys.stdout.flush()
 
     @broadcast.consumer(signals.STATUS_MESSAGE)
+    @synchronize
     def update_status_message(self, message: str):
         """Update the status message and redraw interface"""
         self.status_message = message
@@ -186,7 +199,9 @@ class PrettyTerminal(threading.Thread, Broadcastable):
         
         sys.stdout.flush()
     
+    
     @broadcast.consumer(signals.LOG)
+    @synchronize
     def LOG(self, message: str):
         if self.raw_mode:
             self.print(message)
@@ -194,6 +209,7 @@ class PrettyTerminal(threading.Thread, Broadcastable):
             sys.stdout.write(f"{message}\n\r")
     
     @broadcast.consumer(signals.ERROR)
+    @synchronize
     def ERROR_LOG(self, message: str):
         if self.raw_mode:
             self.print(f"{message}", True)
@@ -201,10 +217,11 @@ class PrettyTerminal(threading.Thread, Broadcastable):
             sys.stdout.write(f"{RED}{message}{RESET}\n\r")
 
     @broadcast.consumer(signals.PROMPT_USER)
+    @synchronize
     def prompt_user(self, prompt: str):
         self.user_prompt = prompt
         self.redraw_input_line()
-    
+
     def print(self, message: str, error=False):
         """Print a message above the status/input lines"""
         # Save current state
