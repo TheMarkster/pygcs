@@ -6,10 +6,8 @@ __version__ = "0.1.0"
 __author__ = "Mark Greene"
 __email__ = "markdanielgreene@gmail.com"
 
-from .broadcast import broadcast, get_broadcast, Broadcastable, Signal
-
 __all__ = [
-    "broadcast",
+    "events",
     "get_broadcast", 
     "Broadcastable",
     "Signal",

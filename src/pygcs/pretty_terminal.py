@@ -6,8 +6,8 @@ import select
 import os
 import time
 from functools import wraps
-from .signals import signals
-from .broadcast import broadcast, Broadcastable, Signal
+from .signals import GlobalSignals
+from .event_bus import events, Broadcastable, broadcast
 
 CLEAR_LINE = '\x1b[2K'
 RED = '\x1b[31m'
@@ -85,18 +85,16 @@ class PrettyTerminal(threading.Thread, Broadcastable):
             with self.lock:
                 self.restore_terminal()
         
-        signals.LOG.emit("PrettyTerminal thread exited.")
+        broadcast(GlobalSignals.LOG, "PrettyTerminal thread exited.")
 
 
     def handle_char(self, c):
         """Handle individual character input"""
         if ord(c) == 3:  # Ctrl+C
-            self.running = False
-            signals.DISCONNECTED.emit()
+            broadcast(GlobalSignals.DISCONNECTED)
             return
         elif ord(c) == 4:  # Ctrl+D (EOF)
-            self.running = False
-            signals.DISCONNECTED.emit()
+            broadcast(GlobalSignals.DISCONNECTED)
             return
         elif c == '\n' or c == '\r':  # Enter key
             # Process the line without showing the newline
@@ -104,9 +102,9 @@ class PrettyTerminal(threading.Thread, Broadcastable):
             self.current_user_input = ""
             if self.user_prompt:
                 self.user_prompt = ""
-                signals.USER_RESPONSE.emit(line)
+                broadcast(GlobalSignals.USER_RESPONSE, line)
             else:
-                signals.USER_INPUT.emit(line)
+                broadcast(GlobalSignals.USER_INPUT, line)
             self.cursor_position = 0
             
             # Redraw interface after processing input
@@ -173,8 +171,15 @@ class PrettyTerminal(threading.Thread, Broadcastable):
             sys.stdout.write(f"\x1b[{chars_after_cursor}D")
         
         sys.stdout.flush()
+    
+    @events.consumer(GlobalSignals.DISCONNECTED)
+    def disconnect(self):
+        """Handle disconnection event"""
+        self.running = False
+        self.restore_terminal()
+        broadcast(GlobalSignals.LOG, "PrettyTerminal disconnected.")
 
-    @broadcast.consumer(signals.STATUS_MESSAGE)
+    @events.consumer(GlobalSignals.STATUS_MESSAGE)
     @synchronize
     def update_status_message(self, message: str):
         """Update the status message and redraw interface"""
@@ -200,7 +205,7 @@ class PrettyTerminal(threading.Thread, Broadcastable):
         sys.stdout.flush()
     
     
-    @broadcast.consumer(signals.LOG)
+    @events.consumer(GlobalSignals.LOG)
     @synchronize
     def LOG(self, message: str):
         if self.raw_mode:
@@ -208,7 +213,7 @@ class PrettyTerminal(threading.Thread, Broadcastable):
         else:
             sys.stdout.write(f"{message}\n\r")
     
-    @broadcast.consumer(signals.ERROR)
+    @events.consumer(GlobalSignals.ERROR)
     @synchronize
     def ERROR_LOG(self, message: str):
         if self.raw_mode:
@@ -216,7 +221,7 @@ class PrettyTerminal(threading.Thread, Broadcastable):
         else:
             sys.stdout.write(f"{RED}{message}{RESET}\n\r")
 
-    @broadcast.consumer(signals.PROMPT_USER)
+    @events.consumer(GlobalSignals.PROMPT_USER)
     @synchronize
     def prompt_user(self, prompt: str):
         self.user_prompt = prompt
@@ -254,11 +259,11 @@ class PrettyTerminal(threading.Thread, Broadcastable):
 
 # time.sleep(0.1)
 
-# @broadcast.consumer('user_response')
+# @events.consumer('user_response')
 # def handle_user_response(response: str):
 #     broadcast.emit('log', f"User responded: '{response}'")
 
-# @broadcast.consumer('user_input')
+# @events.consumer('user_input')
 # def handle_user_input(command: str):
 #     broadcast.emit('log', f"User input: '{command}'")
 

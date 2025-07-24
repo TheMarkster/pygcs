@@ -6,7 +6,7 @@ The Event Bridge system provides a distributed event architecture that allows mu
 
 1. **Event Bridge Server** - Central coordinator that receives events from clients and broadcasts them to all connected clients
 2. **Event Bridge Client** - Connects to the server and synchronizes local events with the distributed system
-3. **Integration with Broadcast System** - Uses the existing broadcast/consumer system for local event handling
+3. **Integration with Broadcast System** - Uses the existing events.consumer system for local event handling
 
 ## Architecture
 
@@ -40,7 +40,7 @@ The Event Bridge system provides a distributed event architecture that allows mu
 - Error recovery and logging
 
 ### 3. Integration with Existing Broadcast System
-- Uses the same `@broadcast.consumer` decorators
+- Uses the same `@events.consumer` decorators
 - Maintains compatibility with standalone functions and class methods
 - Supports namespaces and middleware
 

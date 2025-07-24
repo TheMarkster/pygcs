@@ -2,8 +2,8 @@ from pygcs.controller import GRBLController
 from pygcs.serial_comm import GRBLSerial
 from pygcs.pretty_terminal import PrettyTerminal
 from pygcs.event_bridge_server import EventBridgeServer
-from pygcs.broadcast import broadcast
-from pygcs.signals import signals
+from pygcs.event_bus import events
+from pygcs.signals import GlobalSignals
 import time
 
 def main():
@@ -21,7 +21,7 @@ def main():
 
     server = EventBridgeServer()
     thread_pool['event_bridge'] = server
-    broadcast.forward_to(server._forward_event_to_clients)
+    events.forward_to(server._forward_event_to_clients)
     server.start()
 
     # for thread in thread_pool:
@@ -32,7 +32,7 @@ def main():
     controller.exec()
 
     for name, thread in thread_pool.items():
-        signals.LOG.emit(f"Waiting for {name} thread to exit...")
+        broadcast(GlobalSignals.LOG, f"Waiting for {name} thread to exit...")
         thread.join()
 
 

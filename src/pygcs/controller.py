@@ -4,8 +4,8 @@ import time
 import re
 # from listeners import GRBLListener, TerminalListener
 import json
-from .signals import signals
-from .broadcast import Signal, broadcast, Broadcastable
+from .signals import GlobalSignals
+from .event_bus import events, Broadcastable
 
 
 
@@ -164,19 +164,19 @@ class GRBLController(Broadcastable):
             else:
                 time.sleep(0.1)
         self.stopped = True
-        signals.LOG.emit("Controller main loop exited.")
+        broadcast(GlobalSignals.LOG, "Controller main loop exited.")
     
 
 
-    @broadcast.consumer(signals.USER_RESPONSE)
+    @events.consumer(GlobalSignals.USER_RESPONSE)
     def user_response(self, response):
         self.wait_for_user = False
 
     def __del__(self):
         # Shutdown all connections and threads
-        signals.DISCONNECTED.emit()
+        broadcast(GlobalSignals.DISCONNECTED, )
 
-    @broadcast.consumer(signals.DISCONNECTED)
+    @events.consumer(GlobalSignals.DISCONNECTED)
     def shutdown(self):
         self.running = False
 
@@ -258,12 +258,12 @@ class GRBLController(Broadcastable):
         time.sleep(0.5)
         self.wait_for_idle(timeout=120)
 
-    @broadcast.consumer(signals.EXEC_MACRO)
+    @events.consumer(GlobalSignals.EXEC_MACRO)
     def exec_macro(self, command, main_thread=False):
         if not main_thread:
             with self.lock:
                 if self.program_running:
-                    signals.ERROR.emit("Cannot execute macro while another is running.")
+                    broadcast(GlobalSignals.ERROR, "Cannot execute macro while another is running.")
                 else:
                     self.program_queue.append((self.exec_macro, command, True))
             return
@@ -307,7 +307,7 @@ class GRBLController(Broadcastable):
     def ser(self, value: serial.Serial):
         self._ser = value
     
-    @broadcast.consumer(signals.DATA_RECEIVED)
+    @events.consumer(GlobalSignals.DATA_RECEIVED)
     def receive_message(self, message):
         if message == 'ok':
             if self.command_stack:
@@ -342,14 +342,14 @@ class GRBLController(Broadcastable):
         else:
             print(f"Received message: {message}")
     
-    @broadcast.consumer(signals.LOAD_PROGRAM)
+    @events.consumer(GlobalSignals.LOAD_PROGRAM)
     def load_program(self, program):
         if self.program_running:
-            signals.ERROR.emit("Cannot load program while another is running.")
+            broadcast(GlobalSignals.ERROR, "Cannot load program while another is running.")
 
         self.program = program
     
-    @broadcast.consumer(signals.PROGRAM_START)
+    @events.consumer(GlobalSignals.PROGRAM_START)
     def program_start(self):
         for line in self.program.splitlines():
             line = line.strip()
@@ -381,7 +381,7 @@ class GRBLController(Broadcastable):
             else:
                 print(f"Sending command: {command}")
                 # self.ser.write((command + '\n').encode('utf-8'))
-                signals.SEND_DATA.emit(command + '\n')
+                broadcast(GlobalSignals.SEND_DATA, command + '\n')
                 self.command_stack.append(tracker)
         
         return tracker
@@ -409,7 +409,7 @@ class GRBLController(Broadcastable):
 
         self.wait_for_user = True
         # broadcast.emit('prompt_user', "Press Enter to continue...")
-        signals.PROMPT_USER.emit("Press Enter to continue...")
+        broadcast(GlobalSignals.PROMPT_USER, "Press Enter to continue...")
         while self.wait_for_user:
             time.sleep(0.1)
         
