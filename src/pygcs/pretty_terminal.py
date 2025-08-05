@@ -6,8 +6,11 @@ import select
 import os
 import time
 from functools import wraps
+
+from pygcs.event_bus.runtime import local_broadcast
 from .signals import GlobalSignals
-from .event_bus import events, Broadcastable, broadcast
+from .event_bus import Broadcastable, consumer, broadcast
+# from .registry import broadcast, consumer
 
 CLEAR_LINE = '\x1b[2K'
 RED = '\x1b[31m'
@@ -85,16 +88,16 @@ class PrettyTerminal(threading.Thread, Broadcastable):
             with self.lock:
                 self.restore_terminal()
         
-        broadcast(GlobalSignals.LOG, "PrettyTerminal thread exited.")
+        print("PrettyTerminal thread exited.")
 
 
     def handle_char(self, c):
         """Handle individual character input"""
         if ord(c) == 3:  # Ctrl+C
-            broadcast(GlobalSignals.DISCONNECTED)
+            local_broadcast(GlobalSignals.DISCONNECTED)
             return
         elif ord(c) == 4:  # Ctrl+D (EOF)
-            broadcast(GlobalSignals.DISCONNECTED)
+            local_broadcast(GlobalSignals.DISCONNECTED)
             return
         elif c == '\n' or c == '\r':  # Enter key
             # Process the line without showing the newline
@@ -172,14 +175,14 @@ class PrettyTerminal(threading.Thread, Broadcastable):
         
         sys.stdout.flush()
     
-    @events.consumer(GlobalSignals.DISCONNECTED)
+    @consumer(GlobalSignals.DISCONNECTED)
     def disconnect(self):
         """Handle disconnection event"""
         self.running = False
         self.restore_terminal()
-        broadcast(GlobalSignals.LOG, "PrettyTerminal disconnected.")
+        print("PrettyTerminal disconnected.")
 
-    @events.consumer(GlobalSignals.STATUS_MESSAGE)
+    @consumer(GlobalSignals.STATUS_MESSAGE)
     @synchronize
     def update_status_message(self, message: str):
         """Update the status message and redraw interface"""
@@ -205,7 +208,7 @@ class PrettyTerminal(threading.Thread, Broadcastable):
         sys.stdout.flush()
     
     
-    @events.consumer(GlobalSignals.LOG)
+    @consumer(GlobalSignals.LOG)
     @synchronize
     def LOG(self, message: str):
         if self.raw_mode:
@@ -213,7 +216,7 @@ class PrettyTerminal(threading.Thread, Broadcastable):
         else:
             sys.stdout.write(f"{message}\n\r")
     
-    @events.consumer(GlobalSignals.ERROR)
+    @consumer(GlobalSignals.ERROR)
     @synchronize
     def ERROR_LOG(self, message: str):
         if self.raw_mode:
@@ -221,7 +224,7 @@ class PrettyTerminal(threading.Thread, Broadcastable):
         else:
             sys.stdout.write(f"{RED}{message}{RESET}\n\r")
 
-    @events.consumer(GlobalSignals.PROMPT_USER)
+    @consumer(GlobalSignals.PROMPT_USER)
     @synchronize
     def prompt_user(self, prompt: str):
         self.user_prompt = prompt
@@ -259,11 +262,11 @@ class PrettyTerminal(threading.Thread, Broadcastable):
 
 # time.sleep(0.1)
 
-# @events.consumer('user_response')
+# @consumer('user_response')
 # def handle_user_response(response: str):
 #     broadcast.emit('log', f"User responded: '{response}'")
 
-# @events.consumer('user_input')
+# @consumer('user_input')
 # def handle_user_input(command: str):
 #     broadcast.emit('log', f"User input: '{command}'")
 

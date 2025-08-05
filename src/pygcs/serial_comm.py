@@ -1,10 +1,9 @@
-from .event_bus import Broadcastable, events, broadcast
 import serial
 import threading
 from .signals import GlobalSignals
+from .event_bus import Broadcastable, broadcast, consumer, local_broadcast
 
 class GRBLSerial(threading.Thread, Broadcastable):
-
     def __init__(self, port, baudrate=115200):
         threading.Thread.__init__(self, daemon=True)
         Broadcastable.__init__(self)
@@ -20,14 +19,14 @@ class GRBLSerial(threading.Thread, Broadcastable):
                 line = self.ser.readline().decode('utf-8').rstrip()
                 if line:
                     broadcast(GlobalSignals.DATA_RECEIVED, line)
-                    broadcast(GlobalSignals.LOG, f"Received: {line}")
+                    print(f"Received: {line}")
             except Exception as e:
                 if self.running:
-                    broadcast(GlobalSignals.ERROR, f"Serial read error: {e}")
-                    broadcast(GlobalSignals.DISCONNECTED, )
-        broadcast(GlobalSignals.LOG, "Serial listener thread exited.")
+                    print("ERROR:" + f"Serial read error: {e}")
+                    local_broadcast(GlobalSignals.DISCONNECTED, )
+        print("Serial listener thread exited.")
 
-    @events.consumer(GlobalSignals.SEND_DATA)
+    @consumer(GlobalSignals.SEND_DATA)
     def send_command(self, command: str):
         if self.ser.is_open:
             command_str = command.strip() + '\n'
@@ -37,7 +36,7 @@ class GRBLSerial(threading.Thread, Broadcastable):
         else:
             broadcast(GlobalSignals.ERROR_LOG, "Serial port is not open")
 
-    @events.consumer(GlobalSignals.DISCONNECTED)
+    @consumer(GlobalSignals.DISCONNECTED)
     def disconnect(self):
         self.running = False
         if self.ser.is_open:

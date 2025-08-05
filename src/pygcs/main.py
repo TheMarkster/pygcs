@@ -4,6 +4,7 @@ from pygcs.pretty_terminal import PrettyTerminal
 from pygcs.event_bridge_server import EventBridgeServer
 from pygcs.event_bus import events
 from pygcs.signals import GlobalSignals
+from pygcs.registry import broadcast, consumer
 import time
 
 def main():
@@ -32,7 +33,7 @@ def main():
     controller.exec()
 
     for name, thread in thread_pool.items():
-        broadcast(GlobalSignals.LOG, f"Waiting for {name} thread to exit...")
+        print(f"Waiting for {name} thread to exit...")
         thread.join()
 
 

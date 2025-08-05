@@ -5,9 +5,8 @@ import re
 # from listeners import GRBLListener, TerminalListener
 import json
 from .signals import GlobalSignals
-from .event_bus import events, Broadcastable
-
-
+from .event_bus import events, Broadcastable, broadcast, consumer, local_broadcast
+# from .logging import log as print
 
 class SentCommand:
     def __init__(self, command: str):
@@ -120,16 +119,7 @@ class GRBLController(Broadcastable):
         # Custom data
         self.custom_data = {}
 
-        # Communications        
-        # self.ser = serial.Serial(port, baudrate, timeout=timeout)
-
-        # Threading
-        # print(f"Connected to {port} at {baudrate} baud.")
-        self.lock = threading.Lock()
-        # self.monitor_thread = GRBLListener(self)
-        # self.monitor_thread.start()
-        # self.terminal_thread = TerminalListener(self)
-        # self.terminal_thread.start()
+        self.lock = threading.RLock()
         self.macro_path = './macros'
         
         self.paused = False
@@ -141,11 +131,6 @@ class GRBLController(Broadcastable):
 
         self.running = True
         self.stopped = True
-        
-        
-        # Initialize control server
-        # self.control_server = ControlServer(self)
-        # self.control_server.start()
     
     def exec(self):
         self.stopped = False
@@ -164,19 +149,18 @@ class GRBLController(Broadcastable):
             else:
                 time.sleep(0.1)
         self.stopped = True
-        broadcast(GlobalSignals.LOG, "Controller main loop exited.")
+        print("Controller main loop exited.")
     
 
-
-    @events.consumer(GlobalSignals.USER_RESPONSE)
+    @consumer(GlobalSignals.USER_RESPONSE)
     def user_response(self, response):
         self.wait_for_user = False
 
     def __del__(self):
         # Shutdown all connections and threads
-        broadcast(GlobalSignals.DISCONNECTED, )
+        local_broadcast(GlobalSignals.DISCONNECTED, )
 
-    @events.consumer(GlobalSignals.DISCONNECTED)
+    @consumer(GlobalSignals.DISCONNECTED)
     def shutdown(self):
         self.running = False
 
@@ -258,12 +242,12 @@ class GRBLController(Broadcastable):
         time.sleep(0.5)
         self.wait_for_idle(timeout=120)
 
-    @events.consumer(GlobalSignals.EXEC_MACRO)
+    # @consumer(GlobalSignals.EXEC_MACRO)
     def exec_macro(self, command, main_thread=False):
         if not main_thread:
             with self.lock:
                 if self.program_running:
-                    broadcast(GlobalSignals.ERROR, "Cannot execute macro while another is running.")
+                    print("ERROR:" + "Cannot execute macro while another is running.")
                 else:
                     self.program_queue.append((self.exec_macro, command, True))
             return
@@ -307,7 +291,7 @@ class GRBLController(Broadcastable):
     def ser(self, value: serial.Serial):
         self._ser = value
     
-    @events.consumer(GlobalSignals.DATA_RECEIVED)
+    @consumer(GlobalSignals.DATA_RECEIVED)
     def receive_message(self, message):
         if message == 'ok':
             if self.command_stack:
@@ -342,14 +326,14 @@ class GRBLController(Broadcastable):
         else:
             print(f"Received message: {message}")
     
-    @events.consumer(GlobalSignals.LOAD_PROGRAM)
+    @consumer(GlobalSignals.LOAD_PROGRAM)
     def load_program(self, program):
         if self.program_running:
-            broadcast(GlobalSignals.ERROR, "Cannot load program while another is running.")
+            print("ERROR:" + "Cannot load program while another is running.")
 
         self.program = program
     
-    @events.consumer(GlobalSignals.PROGRAM_START)
+    @consumer(GlobalSignals.PROGRAM_START)
     def program_start(self):
         for line in self.program.splitlines():
             line = line.strip()
@@ -421,3 +405,14 @@ class GRBLController(Broadcastable):
         trackers.append(tracker)
 
         return trackers
+
+    # @staticmethod
+    # def connect_remote(api: APIProcessor) -> GRBLController:
+    #     # Check to see if object exists on the server
+    #     obj_id = api.send_request('get_singleton', 'grbl_controller', timeout=5)
+
+    #     controller = RemoteObject(api, obj_id, GRBLController)
+    #     return controller
+
+if __name__ == "__main__":
+    pass

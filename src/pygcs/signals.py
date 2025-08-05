@@ -1,10 +1,4 @@
-from .event_bus import Broadcastable
 from enum import StrEnum
-
-if 'SIGNALS_MODULE' in globals():
-    raise Exception("signals.py loaded multiple times!")
-else:
-    SIGNALS_MODULE = True
 
 class GlobalSignals(StrEnum):
     # Logging

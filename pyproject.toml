@@ -38,8 +38,9 @@ dependencies = [
 ]
 
 [project.scripts]
-pygcs-event-bridge-server = "pygcs.event_bridge_server:main"
-pygcs-event-bridge-client = "pygcs.event_bridge_client:main"
+pygcs-main-client = "pygcs.main_client:main"
+pygcs-test-client = "pygcs.event_bridge_server:main"
+pygcs-test-server = "pygcs.event_bridge_client:main"
 
 [project.optional-dependencies]
 dev = [
