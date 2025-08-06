@@ -8,10 +8,27 @@ from concurrent.futures import Future, ThreadPoolExecutor
 import threading
 from typing import Dict, List, Literal, Any
 from functools import wraps
+import time
+import weakref
+
+def serialize(result):
+    pass
+
+def deserialize(data):
+    pass
+
+class TestObject:
+    def __init__(self):
+        self.value = "Test Value"
+    
+    def wait(self):
+        time.sleep(1)  # Simulate some wait time
+        return True
 
 class TestClass:
     def __init__(self):
         self.value = "Test Value"
+        self.test_obj = TestObject()
 
     @property
     def test_property(self):
@@ -31,7 +48,7 @@ def main():
 
     client_host = "localhost"
     server_host = "0.0.0.0"
-    port = 8889
+    port = 8890
     server = Server(host=server_host, port=port)
 
     if not server.connect():
@@ -68,7 +85,7 @@ def main():
         
         # Test remote object
         if obj_ids:
-            remote_obj: TestClass = RemoteObject(obj_ids[0], api_client, TestClass)
+            remote_obj: TestClass = api_client.get_remote_object(obj_ids[0])
             
             # Test method call
             result = remote_obj.test_method("hello", "world")
@@ -82,6 +99,13 @@ def main():
             remote_obj.test_property = "New Value"
             new_value = remote_obj.test_property
             print(f"✅ Remote property set and get: {new_value}")
+
+            # Dynamic object registration
+            test_obj = remote_obj.test_obj
+            if test_obj.wait():
+                print("✅ Dynamic object call successful")
+            del test_obj
+            print("✅ Dynamic object registration and wait successful")
             
     except Exception as e:
         print(f"❌ Test failed: {e}")
