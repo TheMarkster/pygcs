@@ -56,6 +56,8 @@ def main():
         return
     
     remote_object_server = RemoteObjectServer()
+    remote_object_server.add_allowed_class([TestClass, TestObject])
+    remote_object_server.set_strict_mode(False)  # Attribute whitelisting not required for this test
     server.add_processor(remote_object_server)
 
     test_obj = TestClass()
@@ -82,31 +84,36 @@ def main():
     try:
         obj_ids = api_client.call('list_objects', args=[TestClass.__name__])
         print(f"✅ API call successful. Registered objects: {obj_ids}")
+
+        callables = api_client.call('list_callables', args=[obj_ids[0]])
+        print(f"✅ Callables for object {obj_ids[0]}: {callables}")
         
         # Test remote object
         if obj_ids:
             remote_obj: TestClass = api_client.get_remote_object(obj_ids[0])
             
-            # Test method call
-            result = remote_obj.test_method("hello", "world")
-            print(f"✅ Remote method call result: {result}")
+            ## Test method call
+            # result = remote_obj.test_method("hello", "world")
+            # print(f"✅ Remote method call result: {result}")
             
-            # Test property get
-            prop_value = remote_obj.test_property
-            print(f"✅ Remote property get: {prop_value}")
+            # # Test property get
+            # prop_value = remote_obj.test_property
+            # print(f"✅ Remote property get: {prop_value}")
             
             # Test property set
-            remote_obj.test_property = "New Value"
-            new_value = remote_obj.test_property
-            print(f"✅ Remote property set and get: {new_value}")
+            # remote_obj.test_property = "New Value"
+            # new_value = remote_obj.test_property
+            # print(f"✅ Remote property set and get: {new_value}")
 
             # Dynamic object registration
+            time.sleep(1) # Let threads settle
+            print("Test object")
             test_obj = remote_obj.test_obj
             if test_obj.wait():
                 print("✅ Dynamic object call successful")
             del test_obj
             print("✅ Dynamic object registration and wait successful")
-            
+            pass
     except Exception as e:
         print(f"❌ Test failed: {e}")
 

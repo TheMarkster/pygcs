@@ -413,7 +413,7 @@ class RemoteObjectServer(MessageProcessor):
         method = getattr(obj, attr_name)
         if not callable(method):
             raise ValueError(f"Attribute '{attr_name}' is not callable")
-
+        
         return self.encode_data(method(*args, **kwargs))
 
     @remote_call_handler(RemoteObjectGet)
@@ -468,6 +468,19 @@ class RemoteObjectServer(MessageProcessor):
     def list_objects(self, class_name: str) -> List[str]:
         """List all registered remote objects of a specific class"""
         return self._classes.get(class_name, [])
+    
+    @api_function(name='list_callables')
+    def list_callables(self, obj_id: str) -> List[str]:
+        """List all registered remote callables"""
+        obj = self.get_object(obj_id)
+
+        callable_attributes = []
+        for attr_name in dir(obj):
+            if self._is_attribute_allowed(obj, attr_name):
+                if callable(getattr(obj, attr_name)):
+                    callable_attributes.append(attr_name)
+        
+        return callable_attributes
 
     def handle_api_request(self, request: APIRequest, client_socket: socket.socket, address: tuple):
         """Handle API requests from clients"""
@@ -609,6 +622,7 @@ class ClientProcessor(MessageProcessor):
                 print(f"❌ Received non-response message in ClientProcessor: {remote_call.call_type}")
                 return False
             
+            
             message_id = remote_call.message_id
 
             if message_id in self.future_map:
@@ -682,6 +696,8 @@ class RemoteCallableAttribute:
         self._name = name
 
     def __call__(self, *args, **kwargs):
+        args = self._remote_obj._client.encode_data(args)
+        kwargs = self._remote_obj._client.encode_data(kwargs)
         remote_call = RemoteObjectCall(
             obj_id=self._remote_obj._obj_id,
             attr_name=self._name,
@@ -707,7 +723,11 @@ class RemoteObject:
                 if not attr.startswith('_'):
                     if callable(getattr(original_class, attr)):
                         self._callables[attr] = RemoteCallableAttribute(self, attr)
-    
+        else:
+            callables = self._client.call("list_callables", args=[self._obj_id])
+            for attr in callables:
+                self._callables[attr] = RemoteCallableAttribute(self, attr)
+
     def __del__(self):
         try:
             self._client.remove_remote_object(self._obj_id)

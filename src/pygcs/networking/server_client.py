@@ -7,6 +7,7 @@ from typing import Tuple
 from .io import read_message, write_message
 from .message import Message
 from .processor import MessageProcessor
+from concurrent.futures import ThreadPoolExecutor
 
 class NetworkObject:
     def __init__(self):
@@ -68,6 +69,7 @@ class SocketConnection(threading.Thread):
         self.sock: socket.socket = sock
         self.address: Tuple = address
         self.running: bool = False
+        self._executer: ThreadPoolExecutor = ThreadPoolExecutor(max_workers=4)
 
     def run(self):
         """Start the thread to handle communication"""
@@ -84,20 +86,28 @@ class SocketConnection(threading.Thread):
                     if message is None:  # Use 'is None' for explicit None check
                         # print(f"📡 Client {self.address} disconnected")
                         break
-
-                    self.parent.process_message(message, self.sock, self.address)
+                    
+                    self._executer.submit(self._process_message, message)
                 except socket.timeout:
                     continue
                 except UnicodeDecodeError:
                     pass
-                    print(f"❌ Client {self.address} sent invalid UTF-8 data - disconnecting")
+                    # print(f"❌ Client {self.address} sent invalid UTF-8 data - disconnecting")
                 except json.JSONDecodeError:
                     pass
-                    print(f"❌ Client {self.address} sent invalid JSON - disconnecting")
+                    # print(f"❌ Client {self.address} sent invalid JSON - disconnecting")
         except Exception as e:
             self.running = False
         finally:
             self._cleanup()  # Use the existing cleanup method
+    
+    def _process_message(self, message: Message):
+        """Process a received message in a separate thread"""
+        try:
+            self.parent.process_message(message, self.sock, self.address)
+        except Exception as e:
+            # print(f"❌ Error processing message from {self.address}: {e}")
+            self._cleanup()
     
     def send_message(self, message: Message):
         """Send a message to a specific client socket"""

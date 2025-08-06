@@ -7,7 +7,7 @@ import time
 import argparse
 
 def test_controller(controller: GRBLController):
-    time.sleep(2)
+    time.sleep(1) # Allow time for connection to stabilize
 
     controller.update_state()
     attempts = 3
