@@ -26,6 +26,7 @@ class EventProcessor(MessageProcessor, EventHandler):
         """Process incoming events and forward them to all connected clients"""
         try:
             event = Event.from_dict(message.data)
+            print(f"📥 Received event '{event.signal}' with args {event.args} from {address}")
             event.push_path(self.get_path_name(client_socket))
             self.receive(event)
             # print(f"📤 Received signal '{event.signal}' and message '{event.args}' from {address}")

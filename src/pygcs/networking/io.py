@@ -24,6 +24,7 @@ def read_message(sock) -> Message:
 
 def write_message(sock: socket.socket, message: Message):
     """Send a Message object to a socket"""
+    # print("Sending message:", message.serialize())
     write_block(sock, message.serialize())
 
 def read_block(sock: socket.socket) -> str:
@@ -40,6 +41,7 @@ def read_block(sock: socket.socket) -> str:
     if not data:
         return None
 
+    # print(data.decode('utf-8'))  # Debug print
     return data.decode('utf-8')
 
 def write_block(sock: socket.socket, data: str | dict) -> None:

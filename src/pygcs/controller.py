@@ -1,36 +1,80 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from functools import wraps
 import threading
+from typing import List, Dict
+import numpy as np
 import serial
 import time
 import re
 # from listeners import GRBLListener, TerminalListener
 import json
 from .signals import GlobalSignals
-from .event_bus import events, Broadcastable, broadcast, consumer, local_broadcast
+from .event_bus import events, Broadcastable, broadcast, consumer, local_broadcas
+from .gcode_prcessing import get_gcode_processor
 # from .logging import log as print
 
-class SentCommand:
-    def __init__(self, command: str):
-        self.command = command
-        self.start_timestamp = time.time()
-        self.stop_timestamp = None
-        self.elapsed_time = 0
-        self.done = False
-    
+class CommandTracker:
+    def __init__(self, parent: GRBLController, command: str, info: Dict = None, callback: callable = None):
+        self.parent: GRBLController = parent
+        self.command: str = command
+        self.start_timestamp: float = None
+        self.stop_timestamp: float = None
+        self.elapsed_time: float = 0
+        self.done: bool = False
+        self.cancelled: bool = False
+        self.in_planning: bool = False
+        self.submitted: bool = False
+        self.info: Dict = info or {}
+        self.callback: callable = callback
+        self.runtime_var: bool = re.match(r'\[.*\]', command) is not None
+
+    def planning(self):
+        """Mark this command as being in the planning stage"""
+        self.in_planning = True
+
     def complete(self):
-        if not self.done:
+        if not self.done and not self.cancelled:
             self.stop_timestamp = time.time()
             self.elapsed_time = self.stop_timestamp - self.start_timestamp
             self.done = True
+
+            if self.callback:
+                self.callback(self)
     
-    def wait(self, timeout=10):
-        if self.done:
+    def cancel(self):
+        """Cancel the command, marking it as done without completion"""
+        if not self.done and not self.cancelled:
+            self.cancelled = True
+            if self.start_timestamp:
+                self.stop_timestamp = time.time()
+            self.elapsed_time = self.stop_timestamp - self.start_timestamp
+            self.cancelled = True
+
+            if self.callback:
+                self.callback(self)
+    
+    def wait(self, timeout=None):
+        if self.done or self.cancelled:
             return
+        
         start_time = time.time()
-        while not self.done:
+        while not self.done and not self.cancelled:
             if time.time() - start_time > timeout:
                 raise TimeoutError(f"Command '{self.command}' timed out.")
             time.sleep(0.1)
-        # print(f"Command {self.command} completed (blocking).")
+    
+    def presubmit(self):
+        """Pre-submit processing, can be overridden by subclasses"""
+        if self.runtime_var:
+            self.command = self.parent.state.update_runtime_vars(self.command)
+
+    def submit(self):
+        """Submit the command to the controller"""
+        self.in_planning = False
+        self.submitted = True
+        self.start_timestamp = time.time()
 
 
 class ErrorState:
@@ -81,84 +125,193 @@ class PositionState:
 
 code_processors = {}
 
-def code_processor(name):
-    """Decorator to register a code processor function"""
+def code_replacement(code):
+    """Decorator to register code replacement processors"""
     def decorator(func):
-        code_processors[name] = func
-        return func
+        @wraps(func)
+        def inner(*args, **kwargs):
+            return func(*args, **kwargs)
+        inner._code_replacement = True
+        inner._code_name = code
+        return inner
+    return decorator
+
+def custom_command(name):
+    """Decorator to register a custom command"""
+    def decorator(func):
+        @wraps(func)
+        def inner(*args, **kwargs):
+            return func(*args, **kwargs)
+        inner._custom_command = True
+        inner._code_name = name
+        return inner
     return decorator
 
 def get_code_processor(line):
     return code_processors.get(line, None)
 
+def grbl_state_var(name):
+    def decorator(func):
+        """Decorator to register a function as a GRBL state variable"""
+        @wraps(func)
+        def wrapper(self, *args, **kwargs):
+            return func(self, *args, **kwargs)
+        wrapper._grbl_state_var = True
+        wrapper._grbl_state_var_name = name
+        return wrapper
+    return decorator
+
+class GRBLState(Broadcastable):
+    def __init__(self):
+        super().__init__()
+        self.idle = False
+        self.position: np.ndarray = np.array([0.0, 0.0, 0.0])
+        self.error_state = ErrorState()
+        self.last_update = ""
+        self.probe_data = [0.0, 0.0, 0.0]
+        self.runtime_variables: Dict[str, callable] = {}
+
+        # Discover state variables
+        for attr_name in dir(self):
+            attr = getattr(self, attr_name)
+
+            if callable(attr) and hasattr(attr, '_grbl_state_var'):
+                # Register the method as a GRBL state variable
+                var_name = attr._grbl_state_var_name
+                self.runtime_variables[var_name] = attr
+
+    @grbl_state_var
+    def posx(self):
+        return self.position[0]
+
+    @grbl_state_var
+    def posy(self):
+        return self.position[1]
+
+    @grbl_state_var
+    def posz(self):
+        return self.position[2]
+
+    def update_runtime_vars(self, command: str) -> str:
+        """Update runtime variables in the command string"""
+        runtime_variables = re.findall(r'\[([^\]]+)\]', command)
+        command = re.sub(r'\[([^\]]+)\]', '%s', command)  # Remove runtime variables from command
+        values = []
+        for var in runtime_variables:
+            if var in self.runtime_variables:
+                values.append(str(self.runtime_variables[var]()))
+            else:
+                raise ValueError(f"Runtime variable '{var}' not found in GRBL state.")
+        return command.format(*values)
+
+
+class Program:
+    def __init__(self, parent: GRBLController, lines: List[str], name=None, program_type=None):
+        self.parent: GRBLController = parent
+        self.name: str = name or "Unnamed Program"
+        self.type: str = program_type or "Program"
+        self.lines: List[str] = lines
+        self.estimated_time: List[float] = None
+        self.trackers: List[CommandTracker] = None
+        self.cur_line: int = 0
+        self.running: bool = False
+
+        # Apply all processing upfront
+        self.pre_process()
+        self.estimate_time()
+        self.create_trackers()
+    
+    def create_trackers(self):
+        """Create command trackers for each line in the program"""
+        self.trackers = [CommandTracker(self.parent, command, info={'program': self.name, 'line_index': i}) for i, command in enumerate(self.lines)]
+
+    def estimate_time(self):
+        """Estimate the time it will take to run the program"""
+        self.estimated_time = 0
+
+    def pre_process(self):
+        gcode_processor = get_gcode_processor()
+        gcode_processor.reset()
+        for line in self.lines:
+            gcode_processor.process_line(line)
+        self.lines = gcode_processor.get_lines()
+
+    def command_callback(self, command: CommandTracker):
+        if command.done:
+            self.cur_line = command.info.get('line_index', self.cur_line+1)
+
+        if command.cancelled:
+            pass
+
 
 class GRBLController(Broadcastable):
     def __init__(self):
         super().__init__()
-        # print("Initializing GRBL Controller...")
+
+        # Settings
+        self.max_command_queue_size = 10
+        self.status_query_frequency = 5
+
         # Command management
-        self.command_stack = []
-        self.planner_queue = []
-        self.error_stack = []
-        self.max_command_stack_size = 10
+        self.command_queue: List[CommandTracker] = []
+        self.planner_queue: List[str] = []
+        self.current_program: Program = None
 
         # Program state
-        self.idle = False
-        self.program_running = False
-        self.current_program = ''
-        self.state = dict(
-            MPos = [0.0, 0.0, 0.0],
-            Bf = [0,0],
-            Fs = [0,0],
-            Ov = [100,100,100],
-        )
-        
-        # Predicted data
-        self.target_position = [0, 0, 0]
-        
-        # Custom data
-        self.custom_data = {}
+        self._state: GRBLState = GRBLState()
+        self.update_frequency: float = 10.0
 
-        self.lock = threading.RLock()
+        self.lock: threading.RLock = threading.RLock()
         self.macro_path = './macros'
-        
-        self.paused = False
-        self.last_probe = None
+        self.running: bool = False
+        self.last_probe: CommandTracker = None
 
-        self.wait_for_user = False
-
-        self.program_queue = []
-
-        self.running = True
-        self.stopped = True
-    
     def exec(self):
+        """Main loop for the controller"""
         self.stopped = False
+        self.running = True
         while self.running:
-            ready = False
-            with self.lock:
-                if self.program_queue:
-                    ready = True
-                    self.program_running = True
-                    func, *args = self.program_queue.pop(0)
-            if ready:
-                func(*args)
-                with self.lock:
-                    if len(self.program_queue) == 0:
-                        self.program_running = False
-            else:
+            thread = threading.Thread(target=self._continuous_updates, daemon=True)
+            thread.start()
+
+            if self.paused:
                 time.sleep(0.1)
+                continue
+
+            if len(self.command_queue) < self.max_command_queue_size:
+                if self.planner_queue:
+                    tracker = self.planner_queue.pop(0)
+                    
+                    if tracker.command[0] == '%':
+                        command_name = tracker.command[1:]
+                        self.exec_custom_command(command_name, tracker)
+                    else:
+                        tracker.presubmit()
+                        self.send_command(tracker.command, tracker)
         self.stopped = True
         print("Controller main loop exited.")
     
+    def execute_custom_command(self, command_name: str, tracker: CommandTracker):
+        """Execute a custom command by name"""
+        if command_name in self.custom_commands:
+            func = self.custom_commands[command_name]
+            func() # TODO: Add parameters to custom commands
+            tracker.complete()
+        else:
+            print(f"Custom command '{command_name}' not found.")
+            tracker.cancel()
 
-    @consumer(GlobalSignals.USER_RESPONSE)
-    def user_response(self, response):
-        self.wait_for_user = False
+    # Command helpers
+    def resume_program(self):
+        self.queue_command('~', immediate=True)
 
-    def __del__(self):
-        # Shutdown all connections and threads
-        local_broadcast(GlobalSignals.DISCONNECTED, )
+    # @consumer(GlobalSignals.USER_RESPONSE)
+    # def user_response(self, response):
+    #     self.wait_for_user = False
+
+    # def __del__(self):
+    #     # Shutdown all connections and threads
+    #     local_broadcast(GlobalSignals.DISCONNECTED, )
 
     @consumer(GlobalSignals.DISCONNECTED)
     def shutdown(self):
@@ -177,7 +330,7 @@ class GRBLController(Broadcastable):
         if paused:
             self.wait_for_unpause()
 
-        tracker = self.send_command('?')
+        tracker = self.queue_command('?')
         
         tracker.wait(timeout=timeout)
         idle, *others = self.last_update.split('|')
@@ -199,48 +352,24 @@ class GRBLController(Broadcastable):
                 continue
 
             self.state[key] = value
-    
+    @custom_command('wait_for_idle')
     def wait_for_idle(self, timeout=60):
         print("Waiting for machine to become idle...")
         start_time = time.time()
         while True:
-            self.update_state(timeout=timeout)
-            if self.idle:
-                break
-            
             if time.time() - start_time > timeout:
                 raise TimeoutError("Timeout waiting for machine to become idle.")
-            time.sleep(0.5)
-        print("Machine is now idle.")
 
-    def process_code(self, lines):
-        trackers = []
-        for line in lines:
-            if line[0] == ';':
+            if len(self.command_queue) > 0:
+                time.sleep(0.5)
                 continue
 
-            line = re.sub(r'\s*\(.*?\)\s*', '', line).strip()
-
-            for i, name in enumerate(['[posx]', '[posy]', '[posz]']):
-                if name in line:
-                    self.wait_for_probe(timeout=120)
-                    print(f"Replaced {name} with {self.probe_data[i]:.3f} in line: {line}")
-                    line = line.replace(name, f"{self.probe_data[i]:.3f}")
-
-            if processor := get_code_processor(line):
-                trackers.extend(processor())
-            else:
-                tracker = self.send_command(line)
-                if tracker:
-                    trackers.append(tracker)
-
-        # if blocking:
-        for tracker in trackers:
-            if tracker:
-                tracker.wait(timeout=600)
+            if not self.check_idle():
+                time.sleep(0.1)
+                continue
             
-        time.sleep(0.5)
-        self.wait_for_idle(timeout=120)
+            break
+        print("Machine is now idle.")
 
     # @consumer(GlobalSignals.EXEC_MACRO)
     def exec_macro(self, command, main_thread=False):
@@ -257,8 +386,20 @@ class GRBLController(Broadcastable):
         with open(path, 'r') as file:
             lines = file.readlines()
 
-        self.process_code(lines)
-        print("Macro execution complete.")
+        program = Program(self, lines, name=f"macro_{command}", program_type="Macro")
+        for line, tracker in zip(program.lines, program.trackers):
+            self.queue_command(line, tracker=tracker)
+
+        return program
+    
+    def _continuous_updates(self):
+        """Continuously update the controller state at a given frequency"""
+        while self.running:
+            start = time.time()
+            tracker = self.queue_command('?')
+            tracker.wait()
+            elapsed = time.time() - start
+            time.sleep(max(0, 1/self.update_frequency - elapsed))
 
     def wait_for_unpause(self, timeout=1000):
         print("Waiting for unpause...")
@@ -282,26 +423,18 @@ class GRBLController(Broadcastable):
     
     def clear_errors(self):
         self.error_stack.clear()
-    
-    @property
-    def ser(self) -> serial.Serial:
-        return self._ser
 
-    @ser.setter
-    def ser(self, value: serial.Serial):
-        self._ser = value
-    
     @consumer(GlobalSignals.DATA_RECEIVED)
     def receive_message(self, message):
         if message == 'ok':
-            if self.command_stack:
-                completed_command = self.command_stack.pop(0)
+            if self.command_queue:
+                completed_command = self.command_queue.pop(0)
                 completed_command.complete()
                 print(f"Command completed: {completed_command.command} in {completed_command.elapsed_time:.2f} seconds")
 
-                if self.planner_queue:
-                    command, tracker = self.planner_queue.pop(0)
-                    self.send_command(command, tracker=tracker)
+                # if self.planner_queue:
+                #     command, tracker = self.planner_queue.pop(0)
+                #     self.send_command(command, tracker=tracker)
             else:
                 print("Received 'ok' but command stack is empty.")
         elif message.startswith('error'):
@@ -338,9 +471,9 @@ class GRBLController(Broadcastable):
         for line in self.program.splitlines():
             line = line.strip()
             if line and not line.startswith(';'):
-                self.send_command(line, high_priority=True)
+                self.queue_command(line, high_priority=True)
 
-    def send_command(self, command, tracker=None, high_priority=False):
+    def queue_command(self, command, immediate=False, tracker=None, high_priority=False):
         command = command.strip()
         if not command:
             return None
@@ -350,61 +483,38 @@ class GRBLController(Broadcastable):
             return
         
         if tracker is None:
-            tracker = SentCommand(command)
+            tracker = CommandTracker(command)
         
         with self.lock:
-            if command.startswith('G38.2'):
-                self.last_probe = tracker
-
-            if len(self.command_stack) >= self.max_command_stack_size:
-                print(f"Queuing command: {command}")
-                if high_priority:
-                    self.planner_queue.insert(0, (command, tracker))
-                else:
-                    self.planner_queue.append((command, tracker))
+            if immediate:
+                self.send_command(command, tracker)
+                return tracker
+            
+            print(f"Queuing command: {command}")
+            if high_priority:
+                self.planner_queue.insert(0, (command, tracker))
             else:
-                print(f"Sending command: {command}")
-                # self.ser.write((command + '\n').encode('utf-8'))
-                broadcast(GlobalSignals.SEND_DATA, command + '\n')
-                self.command_stack.append(tracker)
+                self.planner_queue.append((command, tracker))
         
         return tracker
-            
-    def disconnect(self):
-        if self.ser is None:
-            return
-
-        self.ser = None
-
-    @code_processor('M0')
-    def M0_process(self, line):
-        trackers = []
-
-        print("Pausing for user input...")
-        # tracker.wait()
-        time.sleep(0.5)
-        self.wait_for_idle(timeout=120)
-
+    
+    def send_command(self, command: str, tracker: CommandTracker = None):
+        """Send a command to the GRBL controller"""
+        print(f"Sending command: {command}")
+        if command.startswith('G38.2'):
+            self.last_probe = tracker
+        broadcast(GlobalSignals.SEND_DATA, command + '\n')
+        self.command_queue.append(tracker)
+    
+    def check_idle(self):
+        """Check if the controller is idle"""
         with self.lock:
-            self.paused = True
-        tracker = self.send_command('M0')
-        trackers.append(tracker)
-        time.sleep(0.5)
+            return len(self.command_queue) == 0 and len(self.planner_queue) == 0 and self._state.idle
 
-        self.wait_for_user = True
-        # broadcast.emit('prompt_user', "Press Enter to continue...")
-        broadcast(GlobalSignals.PROMPT_USER, "Press Enter to continue...")
-        while self.wait_for_user:
+    def wait(self):
+        """Waits for command stack to be empty and machine to be idle"""
+        while not self.check_idle():
             time.sleep(0.1)
-        
-        tracker = self.send_command('~') # Cycle start
-
-        with self.lock:
-            self.paused = False
-
-        trackers.append(tracker)
-
-        return trackers
 
     # @staticmethod
     # def connect_remote(api: APIProcessor) -> GRBLController:

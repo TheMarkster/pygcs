@@ -668,7 +668,7 @@ class ClientProcessor(MessageProcessor):
 
         return future
     
-    def call(self, method, args=None, kwargs=None, timeout=30):
+    def call(self, method, args=None, kwargs=None, timeout=60):
         future = self.async_call(method, args, kwargs)
         try:
             return future.result(timeout=timeout)
@@ -705,7 +705,7 @@ class RemoteCallableAttribute:
             kwargs=kwargs
         )
         future = self._remote_obj._client.send_remote_call(remote_call)
-        return future.result(timeout=30)
+        return future.result(timeout=60)
 
 
 class RemoteObject:
@@ -747,7 +747,7 @@ class RemoteObject:
             attr_name=name
         )
         future = self._client.send_remote_call(remote_get)
-        return future.result(timeout=30)
+        return future.result(timeout=60)
 
     def __setattr__(self, name, value):
         if name.startswith('_'):
@@ -762,7 +762,7 @@ class RemoteObject:
             value=value
         )
         future = self._client.send_remote_call(remote_set)
-        return future.result(timeout=30)
+        return future.result(timeout=60)
     
     def __call__(self, *args, **kwargs):
         args = self._client.encode_data(args)
@@ -774,4 +774,4 @@ class RemoteObject:
             kwargs=kwargs
         )
         future = self._client.send_remote_call(remote_call)
-        return future.result(timeout=30)
+        return future.result(timeout=60)

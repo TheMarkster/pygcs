@@ -47,6 +47,7 @@ class NetworkObject:
                 continue
 
             try:
+                # print(f"Sending message to {client_address}: {message.serialize()}")
                 connection.send_message(message)
             except Exception as e:
                 # print(f"❌ Failed to send message to {connection.address}: {e}")
@@ -98,6 +99,7 @@ class SocketConnection(threading.Thread):
                     # print(f"❌ Client {self.address} sent invalid JSON - disconnecting")
         except Exception as e:
             self.running = False
+            print(f"❌ Error in socket thread for {self.address}: {e}")
         finally:
             self._cleanup()  # Use the existing cleanup method
     
@@ -114,8 +116,8 @@ class SocketConnection(threading.Thread):
         try:
             write_message(self.sock, message)
         except Exception as e:
-            # print(f"❌ Failed to send message to {self.address}: {e}")
-            self._cleanup()  # Use the existing cleanup method
+            print(f"❌ Failed to send message to {self.address}: {e}")
+            # self._cleanup()  # Use the existing cleanup method
         
     def stop(self):
         """Stop the communicator"""

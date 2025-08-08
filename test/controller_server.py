@@ -1,7 +1,7 @@
 from pygcs.networking import Server
 from pygcs.event_processor import EventProcessor
 from pygcs.remote_objects import RemoteObjectServer
-from pygcs.controller import GRBLController, SentCommand
+from pygcs.controller import GRBLController, CommandTracker
 from pygcs.serial_comm import GRBLSerial
 
 from pygcs.event_bus import broadcast
@@ -36,7 +36,7 @@ def main():
     thread_pool.append(serial)
 
     remote_object_server = RemoteObjectServer()
-    remote_object_server.add_allowed_class([GRBLController, SentCommand])
+    remote_object_server.add_allowed_class([GRBLController, CommandTracker])
     server.add_processor(remote_object_server)
     controller = GRBLController()
     remote_object_server.register_object(controller)
