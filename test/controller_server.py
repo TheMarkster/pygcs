@@ -1,7 +1,7 @@
 from pygcs.networking import Server
 from pygcs.event_processor import EventProcessor
 from pygcs.remote_objects import RemoteObjectServer
-from pygcs.controller import GRBLController, CommandTracker
+from pygcs.controller.controller import GRBLController, CommandTracker
 from pygcs.serial_comm import GRBLSerial
 
 from pygcs.event_bus import broadcast

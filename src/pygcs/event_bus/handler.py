@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .event import Event
 from typing import List
+import weakref
 
 class EventHandler:
     def __init__(self, name=None):

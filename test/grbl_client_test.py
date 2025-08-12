@@ -8,7 +8,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 import threading
 from typing import Dict, List, Literal, Any
 from functools import wraps
-from pygcs.controller import GRBLController
+from pygcs.controller.controller import GRBLController
 
 def main():
     """Run the remote object server"""

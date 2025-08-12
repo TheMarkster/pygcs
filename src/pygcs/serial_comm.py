@@ -19,11 +19,11 @@ class GRBLSerial(threading.Thread, Broadcastable):
                 line = self.ser.readline().decode('utf-8').rstrip()
                 if line:
                     broadcast(GlobalSignals.DATA_RECEIVED, line)
-                    print(f"Received: {line}")
+                    # print(f"Received: {line}")
             except Exception as e:
                 if self.running:
                     print("ERROR:" + f"Serial read error: {e}")
-                    local_broadcast(GlobalSignals.DISCONNECTED, )
+                    # local_broadcast(GlobalSignals.DISCONNECTED, )
         print("Serial listener thread exited.")
 
     @consumer(GlobalSignals.SEND_DATA)

@@ -1,4 +1,4 @@
-from pygcs.controller import GRBLController
+from pygcs.controller.controller import GRBLController
 from pygcs.networking import Client
 from pygcs.event_processor import EventProcessor
 from pygcs.event_bus import intercept_print, local_broadcast

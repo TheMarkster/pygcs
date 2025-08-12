@@ -133,7 +133,7 @@ class EventHost(EventHandler):
             return func
         return decorator
 
-    def register_instance(self, instance, namespace=None):
+    def register_instance(self, instance):
         """Register an instance to receive broadcast signals"""
         cls_name = instance.__class__.__name__
         self.instances.setdefault(cls_name, []).append(instance)
@@ -170,9 +170,10 @@ class EventHost(EventHandler):
     
 class Broadcastable:
     """Base class for objects that can receive broadcast events"""
-    def __init__(self, namespace=None):
-        self._broadcast_namespace = namespace
-        get_event_host().register_instance(self, namespace)
+    def __init__(self):
+        # self._broadcast_namespace = namespace
+        get_event_host().register_instance(self)
+        pass
     
     def __del__(self):
         get_event_host().unregister_instance(self)

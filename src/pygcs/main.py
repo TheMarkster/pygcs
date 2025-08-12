@@ -1,4 +1,4 @@
-from pygcs.controller import GRBLController
+from pygcs.controller.controller import GRBLController
 from pygcs.serial_comm import GRBLSerial
 from pygcs.pretty_terminal import PrettyTerminal
 from pygcs.event_bridge_server import EventBridgeServer
